@@ -3,5 +3,14 @@ uuid = "907c5f78-bd8a-5475-a1c3-bf2099bf8d36"
 authors = ["Dominique Orban <dominique.orban@gmail.com>"]
 version = "0.1.0"
 
+[deps]
+Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
+GALAHAD = "c591611e-c43e-4808-98fb-ce4cafe3a717"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+NLPModels = "a4795742-8479-5a88-8948-cc11e1c8c1a6"
+
 [compat]
+Accessors = "0.1.42"
+GALAHAD = "0.4"
+NLPModels = "0.21"
 julia = "1.10"

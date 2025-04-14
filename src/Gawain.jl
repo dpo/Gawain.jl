@@ -1,11 +1,15 @@
 module Gawain
 
-"""
-    hi = hello_world()
-A simple function to return "Hello, World!"
-"""
-function hello_world()
-  return "Hello, World!"
-end
+# stdlib dependencies
+using Logging
+
+# external dependencies
+using Accessors
+
+# our own dependencies
+using GALAHAD
+using NLPModels
+
+include("trb.jl")
 
 end
