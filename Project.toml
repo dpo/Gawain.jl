@@ -1,0 +1,7 @@
+name = "Gawain"
+uuid = "907c5f78-bd8a-5475-a1c3-bf2099bf8d36"
+authors = ["Dominique Orban <dominique.orban@gmail.com>"]
+version = "0.1.0"
+
+[compat]
+julia = "1.10"

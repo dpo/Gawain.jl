@@ -1,0 +1,15 @@
+# Changes here will be overwritten by Copier
+AnswerStrategy: recommended
+Authors: Dominique Orban <dominique.orban@gmail.com>
+CodeOfConductContact: dominique.orban@gmail.com
+ConfigIndentation: 2
+JuliaIndentation: 2
+JuliaMinVersion: '1.10'
+License: MPL-2.0
+LicenseCopyrightHolders: Dominique Orban
+MarkdownIndentation: 2
+PackageName: Gawain
+PackageOwner: dpo
+PackageUUID: 907c5f78-bd8a-5475-a1c3-bf2099bf8d36
+_commit: v0.15.0
+_src_path: https://github.com/JuliaBesties/BestieTemplate.jl
