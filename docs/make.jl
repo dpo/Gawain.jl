@@ -18,4 +18,4 @@ makedocs(;
   pages = ["index.md"; numbered_pages],
 )
 
-deploydocs(; repo = "github.com/dpo/Gawain.jl")
+deploydocs(; repo = "github.com/dpo/Gawain.jl", devbranch = "main", push_preview = true)
