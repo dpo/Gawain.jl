@@ -2,4 +2,4 @@ using CUTEst
 
 model = CUTEstModel("3PK")
 status, x = trb(model)
-@test status == 0
+@test status == TRB_STATUS(0)
