@@ -31,6 +31,7 @@ function trb(
 
   nnzh = get_nnzh(nlp)
   hrows, hcols = hess_structure(nlp)
+  x = copy(x0)
 
   trb_import(
     Float64,
@@ -51,7 +52,7 @@ function trb(
   if status[] != 1
     @error "trb_import exits with status = $(status[])"
     trb_terminate(Float64, Int64, data, control, inform)
-    return
+    return status[], x
   end
 
   obj_local = (x, f) -> (f[] = obj(nlp, x); return 0)
@@ -64,7 +65,6 @@ function trb(
   hvals = similar(g, nnzh)
   u = similar(g)
   v = similar(g)
-  x = copy(x0)
 
   finished = false
   while !finished
