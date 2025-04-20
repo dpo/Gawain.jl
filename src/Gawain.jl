@@ -1,6 +1,7 @@
 module Gawain
 
 # stdlib dependencies
+using SparseArrays
 using Logging
 
 # external dependencies

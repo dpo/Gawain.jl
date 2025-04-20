@@ -1,4 +1,5 @@
 using Gawain
+using NLPModels
 using Test
 
 #=
