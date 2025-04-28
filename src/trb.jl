@@ -36,6 +36,16 @@ end
 trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
+"""
+    TRBSolver(model)
+
+A structure that contains all required storage to run solver TRB.
+A TRBSolver instance can be used to perform efficient re-solves of a problem (e.g., with a different initial guess or different parameter).
+
+### Arguments
+
+- `model::AbstractNLPModel`: an `NLPModel` representing an unconstrained or bound-constrained problem.
+"""
 mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolver where {
   M<:AbstractNLPModel,
   T,
@@ -117,21 +127,29 @@ function SolverCore.reset!(
 end
 
 """
-    trb(nlp; kwargs...)
+    trb(model; kwargs...)
 
-Solve the bound-constrained problem `nlp` with GALAHAD solver TRB.
+Solve the unconstrained or bound-constrained problem `model` with GALAHAD solver TRB.
 
 ### Arguments
 
-- `nlp::AbstractNLPModel`: an `NLPModel` representing an unconstrained or bound-constrained problem.
+- `model::AbstractNLPModel`: an `NLPModel` representing an unconstrained or bound-constrained problem.
 
 ### Keyword arguments
 
-- `x0::AbstractVector`: an initial guess of the same type as `nlp.meta.x0`. Default: `nlp.meta.x0`.
+- `x0::AbstractVector`: an initial guess of the same type as `model.meta.x0`. Default: `model.meta.x0`.
 - `prec`: a function or callable of `(x, u, v)` that overwrites `u` with a preconditioner applied to `v` at the current iterate `x`.
           `prec(x, u, v)` should return `0` on success. Default: u = v, i.e., no preconditioner.
 - `print_level::Int`: verbosity level (see the TRB documentation). Default: 1.
 - `maxit::Int`: maximum number of iterations. Default: max(50, n), where n is the number of variables.
+
+If re-solves are of interest, it is more efficient to first instantiate a solver object and call `solve!()` repeatedly:
+
+    solver = TRBSolver(model)
+    stats = GenericExecutionStats(model)
+    solve!(solver, stats; kwargs...)
+
+where the `kwargs...` are the same as above.
 """
 function trb(model::AbstractNLPModel; kwargs...)
   solver = TRBSolver(model)
