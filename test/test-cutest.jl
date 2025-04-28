@@ -3,15 +3,17 @@ using CUTEst
 model = CUTEstModel("3PK")
 
 # straightfoward test
-status, x = trb(model)
-@test status == TRB_STATUS(0)
+stats = trb(model)
+@test stats.status == :first_order
 
 # test with solver object
 solver = TRBSolver(model)
-status, x = solve!(solver)
-@test status == TRB_STATUS(0)
+stats = GenericExecutionStats(model)
+solve!(solver, stats)
+@test stats.status == :first_order
 
 # test resolve
 reset!(solver)
-status, x = solve!(solver)
-@test status == TRB_STATUS(0)
+reset!(stats)
+solve!(solver, stats)
+@test stats.status == :first_order

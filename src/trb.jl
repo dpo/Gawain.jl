@@ -108,17 +108,21 @@ Solve the bound-constrained problem `nlp` with GALAHAD solver TRB.
 """
 function trb(model::AbstractNLPModel; kwargs...)
   solver = TRBSolver(model)
-  solve!(solver; kwargs...)
+  stats = GenericExecutionStats(model)
+  solve!(solver, stats; kwargs...)
 end
 
 function SolverCore.solve!(
-  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi};
+  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi},
+  stats::GenericExecutionStats;
   x0::AbstractVector{Float64} = solver.model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
   print_level::Int = 1,
   maxit::Int = max(50, solver.model.meta.nvar),
 ) where {M, T, S, Fobj, Fgrad, Fhess, Vi, Fprec}
 
+  real_time = time()
+  set_status!(stats, :unknown)
   model = solver.model
   n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
@@ -149,13 +153,15 @@ function SolverCore.solve!(
   trb_import_status = TRB_IMPORT_STATUS(solver.status[])
   if trb_import_error(trb_import_status)
     @error "trb_import exits with status = $trb_import_status"
-    trb_terminate(T, Int, solver.data, solver.control, solver.inform)
-    # TODO: the function should become type stable when we return proper execution stats
-    return trb_import_status, x
+    set_solver_specific!(stats, :trb_import_status, trb_import_status)
+    set_time!(stats, time() - real_time)
+    set_solution!(stats, x)
+    return stats
   end
 
   eval_status = Ref{Int}()
   finished = false
+  local trb_status
   while !finished
     trb_solve_reverse_with_mat(
       T,
@@ -192,7 +198,26 @@ function SolverCore.solve!(
     end
   end
 
-  # TODO: convert inform to execution stats
-  # trb_information(Float64, Int, data, inform, status)
-  TRB_STATUS(solver.status[]), x
+  trb_information(T, Int, solver.data, solver.inform, solver.status)
+  set_time!(stats, time() - real_time)
+  set_solution!(stats, x)
+  set_objective!(stats, solver.f[])
+  set_dual_residual!(stats, solver.inform[].norm_pg)
+  set_iter!(stats, solver.inform[].iter)
+  if trb_status == TRB_SUCCESS
+    set_status!(stats, :first_order)
+  elseif trb_status == TRB_OBJECTIVE_UNBOUNDED
+    set_status!(stats, :unbounded)
+  elseif trb_status == TRB_MAXIMUM_ITER
+    set_status!(stats, :max_iter)
+  elseif trb_status == TRB_MAXIMUM_TIME
+    set_status!(stats, :max_time)
+  elseif trb_status == TRB_USER_TERMINATION
+    set_status!(stats, :user)
+  else
+    set_status!(stats, :exception)
+    set_solver_specific!(stats, :trb_status, trb_status)
+  end
+
+  stats
 end
