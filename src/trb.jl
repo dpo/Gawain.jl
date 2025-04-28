@@ -7,7 +7,7 @@
 
 export TRB_STATUS
 export TRBSolver
-export trb
+export reset!, solve!, trb
 
 @enum TRB_IMPORT_STATUS begin
   TRB_IMPORT_SUCCESS = 1
@@ -43,20 +43,22 @@ end
 trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
-mutable struct TRBSolver{M, T, S, Fobj, Fgrad, Fhess} <: AbstractOptimizationSolver where {M <: AbstractNLPModel, T, S, Fobj, Fgrad, Fhess}
+mutable struct TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi} <: AbstractOptimizationSolver where {M <: AbstractNLPModel, T, S, Fobj, Fgrad, Fhess, Vi <: AbstractVector}
   model::M
   obj_local::Fobj
   grad_local::Fgrad
   hess_local::Fhess
   f::Ref{T}
   g::S
+  hrows::Vi
+  hcols::Vi
   hvals::S
   u::S
   v::S
   data::Ref{Ptr{Cvoid}}
-  control::Ref{trb_control_type{T,Int64}}
-  status::Ref{Int64}
-  inform::Ref{trb_inform_type{T,Int64}}
+  control::Ref{trb_control_type{T,Int}}
+  status::Ref{Int}
+  inform::Ref{trb_inform_type{T,Int}}
 end
 
 function TRBSolver(model::AbstractNLPModel{T,S}) where {T, S}
@@ -67,14 +69,24 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T, S}
   f = Ref{T}(zero(T))
   g = similar(model.meta.x0)
   nnzh = get_nnzh(model)
+  hrows, hcols = hess_structure(model)
   hvals = similar(g, nnzh)
   u = similar(g)
   v = similar(g)
   data = Ref{Ptr{Cvoid}}()
-  control = Ref{trb_control_type{T,Int64}}()
-  status = Ref{Int64}(0)
-  inform = Ref{trb_inform_type{T,Int64}}()
-  TRBSolver{typeof(model), T, S, typeof(obj_local), typeof(grad_local), typeof(hess_local)}(model, obj_local, grad_local, hess_local, f, g, hvals, u, v, data, control, status, inform)
+  control = Ref{trb_control_type{T,Int}}()
+  status = Ref{Int}(0)
+  inform = Ref{trb_inform_type{T,Int}}()
+  trb_initialize(T, Int, data, control, status)
+  solver = TRBSolver{typeof(model), T, S, typeof(obj_local), typeof(grad_local), typeof(hess_local), typeof(hrows)}(model, obj_local, grad_local, hess_local, f, g, hrows, hcols, hvals, u, v, data, control, status, inform)
+  cleanup(s) = trb_terminate(T, Int, s.data, s.control, s.inform)
+  finalizer(cleanup, solver)
+  solver
+end
+
+function SolverCore.reset!(solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi}) where {M, T, S, Fobj, Fgrad, Fhess, Vi}
+  reset!(solver.model)
+  trb_initialize(T, Int, solver.data, solver.control, solver.status)
 end
 
 """
@@ -94,31 +106,33 @@ Solve the bound-constrained problem `nlp` with GALAHAD solver TRB.
 - `print_level::Int`: verbosity level (see the TRB documentation). Default: 1.
 - `maxit::Int`: maximum number of iterations. Default: max(50, n), where n is the number of variables.
 """
-function trb(
-  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess};
+function trb(model::AbstractNLPModel; kwargs...)
+  solver = TRBSolver(model)
+  solve!(solver; kwargs...)
+end
+
+function SolverCore.solve!(
+  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi};
   x0::AbstractVector{Float64} = solver.model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
   print_level::Int = 1,
   maxit::Int = max(50, solver.model.meta.nvar),
-) where {M, T, S, Fobj, Fgrad, Fhess, Fprec}
+) where {M, T, S, Fobj, Fgrad, Fhess, Vi, Fprec}
 
   model = solver.model
   n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
-
-  trb_initialize(T, Int64, solver.data, solver.control, solver.status)
+  x = copy(x0)
 
   @reset solver.control[].f_indexing = true  # Fortran 1-based indexing
   @reset solver.control[].print_level = print_level
   @reset solver.control[].maxit = maxit
 
   nnzh = get_nnzh(model)
-  hrows, hcols = hess_structure(model)
-  x = copy(x0)
 
   trb_import(
     T,
-    Int64,
+    Int,
     solver.control,
     solver.data,
     solver.status,
@@ -127,25 +141,25 @@ function trb(
     model.meta.uvar,
     "coordinate",
     nnzh,
-    hrows,
-    hcols,
+    solver.hrows,
+    solver.hcols,
     C_NULL,
   )
 
   trb_import_status = TRB_IMPORT_STATUS(solver.status[])
   if trb_import_error(trb_import_status)
     @error "trb_import exits with status = $trb_import_status"
-    trb_terminate(T, Int64, solver.data, solver.control, solver.inform)
+    trb_terminate(T, Int, solver.data, solver.control, solver.inform)
     # TODO: the function should become type stable when we return proper execution stats
     return trb_import_status, x
   end
 
-  eval_status = Ref{Int64}()
+  eval_status = Ref{Int}()
   finished = false
   while !finished
     trb_solve_reverse_with_mat(
       T,
-      Int64,
+      Int,
       solver.data,
       solver.status,
       eval_status,
@@ -179,7 +193,6 @@ function trb(
   end
 
   # TODO: convert inform to execution stats
-  # trb_information(Float64, Int64, data, inform, status)
-  trb_terminate(T, Int64, solver.data, solver.control, solver.inform)
+  # trb_information(Float64, Int, data, inform, status)
   TRB_STATUS(solver.status[]), x
 end
