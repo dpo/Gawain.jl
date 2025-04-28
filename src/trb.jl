@@ -6,6 +6,7 @@
 # TODO: Pass control structure as argument.
 
 export TRB_STATUS
+export TRBSolver
 export trb
 
 @enum TRB_IMPORT_STATUS begin
@@ -42,6 +43,40 @@ end
 trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
+mutable struct TRBSolver{M, T, S, Fobj, Fgrad, Fhess} <: AbstractOptimizationSolver where {M <: AbstractNLPModel, T, S, Fobj, Fgrad, Fhess}
+  model::M
+  obj_local::Fobj
+  grad_local::Fgrad
+  hess_local::Fhess
+  f::Ref{T}
+  g::S
+  hvals::S
+  u::S
+  v::S
+  data::Ref{Ptr{Cvoid}}
+  control::Ref{trb_control_type{T,Int64}}
+  status::Ref{Int64}
+  inform::Ref{trb_inform_type{T,Int64}}
+end
+
+function TRBSolver(model::AbstractNLPModel{T,S}) where {T, S}
+  bound_constrained(model) || error("trb does not handle constraints other than bounds")
+  obj_local = (x, f) -> (f[] = obj(model, x); return 0)
+  grad_local = (x, g) -> (grad!(model, x, g); return 0)
+  hess_local = (x, hvals) -> (hess_coord!(model, x, hvals); return 0)
+  f = Ref{T}(zero(T))
+  g = similar(model.meta.x0)
+  nnzh = get_nnzh(model)
+  hvals = similar(g, nnzh)
+  u = similar(g)
+  v = similar(g)
+  data = Ref{Ptr{Cvoid}}()
+  control = Ref{trb_control_type{T,Int64}}()
+  status = Ref{Int64}(0)
+  inform = Ref{trb_inform_type{T,Int64}}()
+  TRBSolver{typeof(model), T, S, typeof(obj_local), typeof(grad_local), typeof(hess_local)}(model, obj_local, grad_local, hess_local, f, g, hvals, u, v, data, control, status, inform)
+end
+
 """
     trb(nlp; kwargs...)
 
@@ -60,40 +95,36 @@ Solve the bound-constrained problem `nlp` with GALAHAD solver TRB.
 - `maxit::Int`: maximum number of iterations. Default: max(50, n), where n is the number of variables.
 """
 function trb(
-  nlp::AbstractNLPModel{Float64,Vector{Float64}};
-  x0::AbstractVector{Float64} = nlp.meta.x0,
-  prec::F = (x, u, v) -> (u .= v; return 0),
+  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess};
+  x0::AbstractVector{Float64} = solver.model.meta.x0,
+  prec::Fprec = (x, u, v) -> (u .= v; return 0),
   print_level::Int = 1,
-  maxit::Int = max(50, nlp.meta.nvar),
-) where {F}
+  maxit::Int = max(50, solver.model.meta.nvar),
+) where {M, T, S, Fobj, Fgrad, Fhess, Fprec}
 
-  bound_constrained(nlp) || error("trb does not handle constraints other than bounds")
-  n = get_nvar(nlp)
+  model = solver.model
+  n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
 
-  data = Ref{Ptr{Cvoid}}()
-  control = Ref{trb_control_type{Float64,Int64}}()
-  status = Ref{Int64}(0)
-  inform = Ref{trb_inform_type{Float64,Int64}}()
-  trb_initialize(Float64, Int64, data, control, status)
+  trb_initialize(T, Int64, solver.data, solver.control, solver.status)
 
-  @reset control[].f_indexing = true  # Fortran 1-based indexing
-  @reset control[].print_level = print_level
-  @reset control[].maxit = maxit
+  @reset solver.control[].f_indexing = true  # Fortran 1-based indexing
+  @reset solver.control[].print_level = print_level
+  @reset solver.control[].maxit = maxit
 
-  nnzh = get_nnzh(nlp)
-  hrows, hcols = hess_structure(nlp)
+  nnzh = get_nnzh(model)
+  hrows, hcols = hess_structure(model)
   x = copy(x0)
 
   trb_import(
-    Float64,
+    T,
     Int64,
-    control,
-    data,
-    status,
+    solver.control,
+    solver.data,
+    solver.status,
     n,
-    nlp.meta.lvar,
-    nlp.meta.uvar,
+    model.meta.lvar,
+    model.meta.uvar,
     "coordinate",
     nnzh,
     hrows,
@@ -101,56 +132,46 @@ function trb(
     C_NULL,
   )
 
-  trb_import_status = TRB_IMPORT_STATUS(status[])
+  trb_import_status = TRB_IMPORT_STATUS(solver.status[])
   if trb_import_error(trb_import_status)
     @error "trb_import exits with status = $trb_import_status"
-    trb_terminate(Float64, Int64, data, control, inform)
+    trb_terminate(T, Int64, solver.data, solver.control, solver.inform)
     # TODO: the function should become type stable when we return proper execution stats
     return trb_import_status, x
   end
 
-  obj_local = (x, f) -> (f[] = obj(nlp, x); return 0)
-  grad_local = (x, g) -> (grad!(nlp, x, g); return 0)
-  hess_local = (x, hvals) -> (hess_coord!(nlp, x, hvals); return 0)
-
   eval_status = Ref{Int64}()
-  f = Ref{Float64}(0.0)
-  g = similar(nlp.meta.x0)
-  hvals = similar(g, nnzh)
-  u = similar(g)
-  v = similar(g)
-
   finished = false
   while !finished
     trb_solve_reverse_with_mat(
-      Float64,
+      T,
       Int64,
-      data,
-      status,
+      solver.data,
+      solver.status,
       eval_status,
       n,
       x,
-      f[],
-      g,
+      solver.f[],
+      solver.g,
       nnzh,
-      hvals,
-      u,
-      v,
+      solver.hvals,
+      solver.u,
+      solver.v,
     )
-    trb_status = TRB_STATUS(status[])
+    trb_status = TRB_STATUS(solver.status[])
     if trb_status == TRB_SUCCESS # successful termination
       finished = true
     elseif trb_error(trb_status)
       @error "trb_solve_reverse_with_mat returns with status = $trb_status"
       finished = true
     elseif trb_status == TRB_EVALUATE_OBJECTIVE
-      eval_status[] = obj_local(x, f)
+      eval_status[] = solver.obj_local(x, solver.f)
     elseif trb_status == TRB_EVALUATE_GRADIENT
-      eval_status[] = grad_local(x, g)
+      eval_status[] = solver.grad_local(x, solver.g)
     elseif trb_status == TRB_EVALUATE_HESSIAN
-      eval_status[] = hess_local(x, hvals)
+      eval_status[] = solver.hess_local(x, solver.hvals)
     elseif trb_status == TRB_APPLY_PRECONDITIONER
-      eval_status[] = prec(x, u, v)
+      eval_status[] = prec(x, solver.u, solver.v)
     else
       @error "the value $trb_status of status should not occur"
       finished = true
@@ -159,6 +180,6 @@ function trb(
 
   # TODO: convert inform to execution stats
   # trb_information(Float64, Int64, data, inform, status)
-  trb_terminate(Float64, Int64, data, control, inform)
-  TRB_STATUS(status[]), x
+  trb_terminate(T, Int64, solver.data, solver.control, solver.inform)
+  TRB_STATUS(solver.status[]), x
 end
