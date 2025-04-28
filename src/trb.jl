@@ -1,10 +1,3 @@
-# Bare-bones interface to TRB.
-# Only Float64 is currently supported.
-#
-# TODO: Parametrize solver.
-# TODO: Define solver object for efficient re-solves.
-# TODO: Pass control structure as argument.
-
 export TRB_STATUS
 export TRBSolver
 export reset!, solve!, trb
