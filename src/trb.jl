@@ -8,6 +8,16 @@
 export TRB_STATUS
 export trb
 
+@enum TRB_IMPORT_STATUS begin
+  TRB_IMPORT_SUCCESS = 1
+  TRB_IMPORT_ALLOC_ERROR = -1
+  TRB_IMPORT_DEALLOC_ERROR = -2
+  TRB_IMPORT_DIMENSION_ERROR = 3
+end
+
+trb_import_error(status::TRB_IMPORT_STATUS) = status != TRB_IMPORT_SUCCESS
+trb_import_error(status::Integer) = trb_import_error(TRB_IMPORT_STATUS(status))
+
 @enum TRB_STATUS begin
   TRB_SUCCESS = 0
   TRB_ALLOC_ERROR = -1
@@ -24,12 +34,12 @@ export trb
   TRB_EVALUATE_OBJECTIVE = 2
   TRB_EVALUATE_GRADIENT = 3
   TRB_EVALUATE_HESSIAN = 4
-  TRB_EVALUATE_HPROD_ADD = 5  # perform u = u + Hv
+  TRB_EVALUATE_HPROD_UPDATE = 5  # perform u = u + Hv
   TRB_APPLY_PRECONDITIONER = 6
-  TRB_APPLY_SPARSE_HPROD = 7
+  TRB_EVALUATE_SPARSE_HPROD = 7
 end
 
-trb_error(status::TRB_STATUS) = Int(status) < 0
+trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
 """
@@ -91,10 +101,12 @@ function trb(
     C_NULL,
   )
 
-  if status[] != 1
-    @error "trb_import exits with status = $(status[])"
+  trb_import_status = TRB_IMPORT_STATUS(status[])
+  if trb_import_error(trb_import_status)
+    @error "trb_import exits with status = $trb_import_status"
     trb_terminate(Float64, Int64, data, control, inform)
-    return TRB_STATUS(status[]), x
+    # TODO: the function should become type stable when we return proper execution stats
+    return trb_import_status, x
   end
 
   obj_local = (x, f) -> (f[] = obj(nlp, x); return 0)
