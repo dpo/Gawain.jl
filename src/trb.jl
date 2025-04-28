@@ -36,7 +36,15 @@ end
 trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
-mutable struct TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi} <: AbstractOptimizationSolver where {M <: AbstractNLPModel, T, S, Fobj, Fgrad, Fhess, Vi <: AbstractVector}
+mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolver where {
+  M<:AbstractNLPModel,
+  T,
+  S,
+  Fobj,
+  Fgrad,
+  Fhess,
+  Vi<:AbstractVector,
+}
   model::M
   obj_local::Fobj
   grad_local::Fgrad
@@ -54,7 +62,7 @@ mutable struct TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi} <: AbstractOptimizatio
   inform::Ref{trb_inform_type{T,Int}}
 end
 
-function TRBSolver(model::AbstractNLPModel{T,S}) where {T, S}
+function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   bound_constrained(model) || error("trb does not handle constraints other than bounds")
   obj_local = (x, f) -> (f[] = obj(model, x); return 0)
   grad_local = (x, g) -> (grad!(model, x, g); return 0)
@@ -71,13 +79,39 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T, S}
   status = Ref{Int}(0)
   inform = Ref{trb_inform_type{T,Int}}()
   trb_initialize(T, Int, data, control, status)
-  solver = TRBSolver{typeof(model), T, S, typeof(obj_local), typeof(grad_local), typeof(hess_local), typeof(hrows)}(model, obj_local, grad_local, hess_local, f, g, hrows, hcols, hvals, u, v, data, control, status, inform)
+  solver = TRBSolver{
+    typeof(model),
+    T,
+    S,
+    typeof(obj_local),
+    typeof(grad_local),
+    typeof(hess_local),
+    typeof(hrows),
+  }(
+    model,
+    obj_local,
+    grad_local,
+    hess_local,
+    f,
+    g,
+    hrows,
+    hcols,
+    hvals,
+    u,
+    v,
+    data,
+    control,
+    status,
+    inform,
+  )
   cleanup(s) = trb_terminate(T, Int, s.data, s.control, s.inform)
   finalizer(cleanup, solver)
   solver
 end
 
-function SolverCore.reset!(solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi}) where {M, T, S, Fobj, Fgrad, Fhess, Vi}
+function SolverCore.reset!(
+  solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
+) where {M,T,S,Fobj,Fgrad,Fhess,Vi}
   reset!(solver.model)
   trb_initialize(T, Int, solver.data, solver.control, solver.status)
 end
@@ -106,13 +140,13 @@ function trb(model::AbstractNLPModel; kwargs...)
 end
 
 function SolverCore.solve!(
-  solver::TRBSolver{M, T, S, Fobj, Fgrad, Fhess, Vi},
+  solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
   stats::GenericExecutionStats;
   x0::AbstractVector{Float64} = solver.model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
   print_level::Int = 1,
   maxit::Int = max(50, solver.model.meta.nvar),
-) where {M, T, S, Fobj, Fgrad, Fhess, Vi, Fprec}
+) where {M,T,S,Fobj,Fgrad,Fhess,Vi,Fprec}
 
   real_time = time()
   set_status!(stats, :unknown)
