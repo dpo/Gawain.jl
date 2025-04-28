@@ -1,4 +1,5 @@
 using Gawain
+using SolverCore
 using Test
 
 #=
