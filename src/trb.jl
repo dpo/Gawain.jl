@@ -36,6 +36,24 @@ end
 trb_error(status::TRB_STATUS) = status < TRB_SUCCESS
 trb_error(status::Integer) = trb_error(TRB_STATUS(status))
 
+function get_status(trb_status::TRB_STATUS)
+  if trb_status == TRB_SUCCESS
+    return :first_order
+  elseif trb_status == TRB_OBJECTIVE_UNBOUNDED
+    return :unbounded
+  elseif trb_status == TRB_MAXIMUM_ITER
+    return :max_iter
+  elseif trb_status == TRB_MAXIMUM_TIME
+    return :max_time
+  elseif trb_status == TRB_USER_TERMINATION
+    return :user
+  elseif trb_status > TRB_SUCCESS  # still performing iterations
+    return :unknown
+  else
+    return :exception
+  end
+end
+
 """
     TRBSolver(model)
 
@@ -60,7 +78,8 @@ mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolve
   grad_local::Fgrad
   hess_local::Fhess
   f::Ref{T}
-  g::S
+  x::S
+  gx::S
   hrows::Vi
   hcols::Vi
   hvals::S
@@ -78,12 +97,13 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   grad_local = (x, g) -> (grad!(model, x, g); return 0)
   hess_local = (x, hvals) -> (hess_coord!(model, x, hvals); return 0)
   f = Ref{T}(zero(T))
-  g = similar(model.meta.x0)
+  x = similar(model.meta.x0)
+  gx = similar(x)
   nnzh = get_nnzh(model)
   hrows, hcols = hess_structure(model)
-  hvals = similar(g, nnzh)
-  u = similar(g)
-  v = similar(g)
+  hvals = similar(x, nnzh)
+  u = similar(x)
+  v = similar(x)
   data = Ref{Ptr{Cvoid}}()
   control = Ref{trb_control_type{T,Int}}()
   status = Ref{Int}(0)
@@ -103,7 +123,8 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
     grad_local,
     hess_local,
     f,
-    g,
+    x,
+    gx,
     hrows,
     hcols,
     hvals,
@@ -137,11 +158,16 @@ Solve the unconstrained or bound-constrained problem `model` with GALAHAD solver
 
 ### Keyword arguments
 
+- `callback`: a function called at each iteration allowing the user to access intermediate solver information. See below for more details.
 - `x0::AbstractVector`: an initial guess of the same type as `model.meta.x0`. Default: `model.meta.x0`.
 - `prec`: a function or callable of `(x, u, v)` that overwrites `u` with a preconditioner applied to `v` at the current iterate `x`.
           `prec(x, u, v)` should return `0` on success. Default: u = v, i.e., no preconditioner.
 - `print_level::Int`: verbosity level (see the TRB documentation). Default: 1.
 - `maxit::Int`: maximum number of iterations. Default: max(50, n), where n is the number of variables.
+
+### Callback
+
+$(Callback_docstring)
 
 If re-solves are of interest, it is more efficient to first instantiate a solver object and call `solve!()` repeatedly:
 
@@ -160,22 +186,25 @@ end
 function SolverCore.solve!(
   solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
   stats::GenericExecutionStats;
+  callback = (args...) -> nothing,
   x0::AbstractVector{Float64} = solver.model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
   print_level::Int = 1,
   maxit::Int = max(50, solver.model.meta.nvar),
 ) where {M,T,S,Fobj,Fgrad,Fhess,Vi,Fprec}
 
-  real_time = time()
+  start_time = time()
   set_status!(stats, :unknown)
   model = solver.model
   n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
-  x = copy(x0)
+  x = solver.x .= x0
 
   @reset solver.control[].f_indexing = true  # Fortran 1-based indexing
   @reset solver.control[].print_level = print_level
   @reset solver.control[].maxit = maxit
+  @reset solver.control[].error = 6
+  @reset solver.control[].out = 6
 
   nnzh = get_nnzh(model)
 
@@ -199,14 +228,19 @@ function SolverCore.solve!(
   if trb_import_error(trb_import_status)
     @error "trb_import exits with status = $trb_import_status"
     set_solver_specific!(stats, :trb_import_status, trb_import_status)
-    set_time!(stats, time() - real_time)
+    set_time!(stats, time() - start_time)
     set_solution!(stats, x)
     return stats
   end
 
+  inform_status = Ref{Int}()
   eval_status = Ref{Int}()
-  finished = false
   local trb_status
+  set_iter!(stats, 0)
+
+  callback(model, solver, stats)
+  finished = stats.status != :unknown
+
   while !finished
     trb_solve_reverse_with_mat(
       T,
@@ -217,7 +251,7 @@ function SolverCore.solve!(
       n,
       x,
       solver.f[],
-      solver.g,
+      solver.gx,
       nnzh,
       solver.hvals,
       solver.u,
@@ -232,7 +266,7 @@ function SolverCore.solve!(
     elseif trb_status == TRB_EVALUATE_OBJECTIVE
       eval_status[] = solver.obj_local(x, solver.f)
     elseif trb_status == TRB_EVALUATE_GRADIENT
-      eval_status[] = solver.grad_local(x, solver.g)
+      eval_status[] = solver.grad_local(x, solver.gx)
     elseif trb_status == TRB_EVALUATE_HESSIAN
       eval_status[] = solver.hess_local(x, solver.hvals)
     elseif trb_status == TRB_APPLY_PRECONDITIONER
@@ -241,28 +275,34 @@ function SolverCore.solve!(
       @error "the value $trb_status of status should not occur"
       finished = true
     end
+
+    trb_information(T, Int, solver.data, solver.inform, inform_status)
+    set_time!(stats, time() - start_time)
+    set_solution!(stats, x)
+    set_objective!(stats, solver.f[])
+    set_dual_residual!(stats, solver.inform[].norm_pg)
+    set_iter!(stats, solver.inform[].iter)
+    set_status!(stats, get_status(trb_status))
+    set_solver_specific!(stats, :trb_status, trb_status)
+
+    callback(model, solver, stats)
+    finished |= stats.status != :unknown
   end
 
-  trb_information(T, Int, solver.data, solver.inform, solver.status)
-  set_time!(stats, time() - real_time)
+  trb_information(T, Int, solver.data, solver.inform, inform_status)
+  set_time!(stats, time() - start_time)
   set_solution!(stats, x)
   set_objective!(stats, solver.f[])
+  set_primal_residual!(stats, zero(T))
   set_dual_residual!(stats, solver.inform[].norm_pg)
-  set_iter!(stats, solver.inform[].iter)
-  if trb_status == TRB_SUCCESS
-    set_status!(stats, :first_order)
-  elseif trb_status == TRB_OBJECTIVE_UNBOUNDED
-    set_status!(stats, :unbounded)
-  elseif trb_status == TRB_MAXIMUM_ITER
-    set_status!(stats, :max_iter)
-  elseif trb_status == TRB_MAXIMUM_TIME
-    set_status!(stats, :max_time)
-  elseif trb_status == TRB_USER_TERMINATION
-    set_status!(stats, :user)
-  else
-    set_status!(stats, :exception)
-    set_solver_specific!(stats, :trb_status, trb_status)
+  if has_bounds(model)
+    stats.multipliers_L .= max.(0, solver.gx)
+    stats.multipliers_U .= -min.(0, solver.gx)
+    stats.bounds_multipliers_reliable = true
   end
+  set_iter!(stats, solver.inform[].iter)
+  stats.status == :user || set_status!(stats, get_status(trb_status))
+  set_solver_specific!(stats, :trb_status, trb_status)
 
   stats
 end
