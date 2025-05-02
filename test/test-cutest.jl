@@ -32,3 +32,5 @@ solve!(
 )
 @test stats.status == :user
 @test stats.iter == 3
+
+finalize(model)
