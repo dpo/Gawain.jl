@@ -73,11 +73,12 @@ mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolve
   Fhess,
   Vi<:AbstractVector,
 }
+  # TODO: get the model out of here
   model::M
   obj_local::Fobj
   grad_local::Fgrad
   hess_local::Fhess
-  f::Ref{T}
+  f::Base.RefValue{T}
   x::S
   gx::S
   hrows::Vi
@@ -85,10 +86,12 @@ mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolve
   hvals::S
   u::S
   v::S
-  data::Ref{Ptr{Cvoid}}
-  control::Ref{trb_control_type{T,Int}}
-  status::Ref{Int}
-  inform::Ref{trb_inform_type{T,Int}}
+  data::Base.RefValue{Ptr{Cvoid}}
+  control::Base.RefValue{trb_control_type{T,Int}}
+  status::Base.RefValue{Int}
+  inform::Base.RefValue{trb_inform_type{T,Int}}
+  inform_status::Base.RefValue{Int}
+  eval_status::Base.RefValue{Int}
 end
 
 function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
@@ -108,7 +111,15 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   control = Ref{trb_control_type{T,Int}}()
   status = Ref{Int}(0)
   inform = Ref{trb_inform_type{T,Int}}()
+  inform_status = Ref{Int}()
+  eval_status = Ref{Int}()
   trb_initialize(T, Int, data, control, status)
+  @reset control[].f_indexing = true  # Fortran 1-based indexing
+  # TODO: figure out the best way for a user to adjust options
+  # the following lines allocate
+  @reset control[].print_level = 0
+  @reset control[].error = 6
+  @reset control[].out = 6
   solver = TRBSolver{
     typeof(model),
     T,
@@ -134,6 +145,8 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
     control,
     status,
     inform,
+    inform_status,
+    eval_status,
   )
   cleanup(s) = trb_terminate(T, Int, s.data, s.control, s.inform)
   finalizer(cleanup, solver)
@@ -144,7 +157,8 @@ function SolverCore.reset!(
   solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
 ) where {M,T,S,Fobj,Fgrad,Fhess,Vi}
   reset!(solver.model)
-  trb_initialize(T, Int, solver.data, solver.control, solver.status)
+  # FIXME: The following line resets solver.control and deactivates f_indexing
+  # trb_initialize(T, Int, solver.data, solver.control, solver.status)
 end
 
 """
@@ -172,14 +186,14 @@ $(Callback_docstring)
 If re-solves are of interest, it is more efficient to first instantiate a solver object and call `solve!()` repeatedly:
 
     solver = TRBSolver(model)
-    stats = GenericExecutionStats(model)
+    stats = GenericExecutionStats(model, solver_specific = Dict{Symbol, TRB_STATUS}())
     solve!(solver, stats; kwargs...)
 
 where the `kwargs...` are the same as above.
 """
 function trb(model::AbstractNLPModel; kwargs...)
   solver = TRBSolver(model)
-  stats = GenericExecutionStats(model)
+  stats = GenericExecutionStats(model, solver_specific = Dict{Symbol,TRB_STATUS}())
   solve!(solver, stats; kwargs...)
 end
 
@@ -189,8 +203,6 @@ function SolverCore.solve!(
   callback = (args...) -> nothing,
   x0::AbstractVector{Float64} = solver.model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
-  print_level::Int = 1,
-  maxit::Int = max(50, solver.model.meta.nvar),
 ) where {M,T,S,Fobj,Fgrad,Fhess,Vi,Fprec}
 
   start_time = time()
@@ -199,12 +211,7 @@ function SolverCore.solve!(
   n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
   x = solver.x .= x0
-
-  @reset solver.control[].f_indexing = true  # Fortran 1-based indexing
-  @reset solver.control[].print_level = print_level
-  @reset solver.control[].maxit = maxit
-  @reset solver.control[].error = 6
-  @reset solver.control[].out = 6
+  reset!(stats)
 
   nnzh = get_nnzh(model)
 
@@ -233,9 +240,7 @@ function SolverCore.solve!(
     return stats
   end
 
-  inform_status = Ref{Int}()
-  eval_status = Ref{Int}()
-  local trb_status
+  local trb_status::TRB_STATUS
   set_iter!(stats, 0)
 
   callback(model, solver, stats)
@@ -247,7 +252,7 @@ function SolverCore.solve!(
       Int,
       solver.data,
       solver.status,
-      eval_status,
+      solver.eval_status,
       n,
       x,
       solver.f[],
@@ -264,19 +269,19 @@ function SolverCore.solve!(
       @error "trb_solve_reverse_with_mat returns with status = $trb_status"
       finished = true
     elseif trb_status == TRB_EVALUATE_OBJECTIVE
-      eval_status[] = solver.obj_local(x, solver.f)
+      solver.eval_status[] = solver.obj_local(x, solver.f)
     elseif trb_status == TRB_EVALUATE_GRADIENT
-      eval_status[] = solver.grad_local(x, solver.gx)
+      solver.eval_status[] = solver.grad_local(x, solver.gx)
     elseif trb_status == TRB_EVALUATE_HESSIAN
-      eval_status[] = solver.hess_local(x, solver.hvals)
+      solver.eval_status[] = solver.hess_local(x, solver.hvals)
     elseif trb_status == TRB_APPLY_PRECONDITIONER
-      eval_status[] = prec(x, solver.u, solver.v)
+      solver.eval_status[] = prec(x, solver.u, solver.v)
     else
       @error "the value $trb_status of status should not occur"
       finished = true
     end
 
-    trb_information(T, Int, solver.data, solver.inform, inform_status)
+    trb_information(T, Int, solver.data, solver.inform, solver.inform_status)
     set_time!(stats, time() - start_time)
     set_solution!(stats, x)
     set_objective!(stats, solver.f[])
@@ -289,18 +294,18 @@ function SolverCore.solve!(
     finished |= stats.status != :unknown
   end
 
-  trb_information(T, Int, solver.data, solver.inform, inform_status)
+  trb_information(T, Int, solver.data, solver.inform, solver.inform_status)
   set_time!(stats, time() - start_time)
   set_solution!(stats, x)
   set_objective!(stats, solver.f[])
   set_primal_residual!(stats, zero(T))
   set_dual_residual!(stats, solver.inform[].norm_pg)
+  set_iter!(stats, solver.inform[].iter)
   if has_bounds(model)
     stats.multipliers_L .= max.(0, solver.gx)
-    stats.multipliers_U .= -min.(0, solver.gx)
+    stats.multipliers_U .= .-min.(0, solver.gx)
     stats.bounds_multipliers_reliable = true
   end
-  set_iter!(stats, solver.inform[].iter)
   stats.status == :user || set_status!(stats, get_status(trb_status))
   set_solver_specific!(stats, :trb_status, trb_status)
 

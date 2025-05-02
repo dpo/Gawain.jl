@@ -4,5 +4,5 @@ SolverCore = "ff4d7338-4cf1-434d-91df-b86cb86fb843"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-CUTEst = "1.1"
+CUTEst = "1.3"
 SolverCore = "0.3"
