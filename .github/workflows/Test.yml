@@ -34,8 +34,25 @@ jobs:
           - "1"
         os:
           - ubuntu-latest
-          - macOS-latest
+          - macOS-13
           - windows-latest
         arch:
           - x64
         allow_failure: [false]
+        include:
+          - version: 'lts'
+            os: ubuntu-24.04-arm
+            arch: arm64
+            allow_failure: false
+          - version: 'lts'
+            os: macos-latest
+            arch: arm64
+            allow_failure: false
+          - version: '1'
+            os: ubuntu-24.04-arm
+            arch: arm64
+            allow_failure: false
+          - version: '1'
+            os: macos-latest
+            arch: arm64
+            allow_failure: false
