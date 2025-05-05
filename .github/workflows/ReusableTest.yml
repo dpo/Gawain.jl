@@ -34,6 +34,12 @@ jobs:
     continue-on-error: ${{ inputs.allow_failure }}
 
     steps:
+      - name: Install compilers if necessary
+        uses: fortran-lang/setup-fortran@main
+        with:
+          compiler: 'gcc'
+          version: '12'
+        if: ${{ inputs.os }} == 'macOS-latest'
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
