@@ -39,7 +39,7 @@ jobs:
         with:
           compiler: 'gcc'
           version: '12'
-        if: ${{ inputs.os }} == 'macOS-latest'
+        if: ${{ inputs.os }} == 'macOS-latest' || ${{ inputs.os }} == 'macos-13'
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
