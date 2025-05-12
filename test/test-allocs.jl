@@ -14,10 +14,10 @@ if Sys.isunix()
   model = CUTEstModel("3PK")
   solver = TRBSolver(model)
   stats = GenericExecutionStats(model, solver_specific = Dict{Symbol,TRB_STATUS}())
-  solve!(solver, stats)
+  solve!(solver, model, stats)
   reset!(solver)
   # reset!(model)
-  al = @wrappedallocs solve!(solver, stats)
+  al = @wrappedallocs solve!(solver, model, stats)
   @test al == 0
   finalize(model)
 end

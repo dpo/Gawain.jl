@@ -10,14 +10,14 @@ stats = trb(model)
 # test with solver object
 solver = TRBSolver(model)
 stats = GenericExecutionStats(model)
-solve!(solver, stats)
+solve!(solver, model, stats)
 @test stats.status == :first_order
 @test stats.iter == 5
 
 # test resolve
 reset!(solver)
 reset!(stats)
-solve!(solver, stats)
+solve!(solver, model, stats)
 @test stats.status == :first_order
 @test stats.iter == 5
 
@@ -26,6 +26,7 @@ reset!(solver)
 reset!(stats)
 solve!(
   solver,
+  model,
   stats,
   callback = (model, solver, stats) ->
     set_status!(stats, stats.iter == 3 ? :user : :unknown),

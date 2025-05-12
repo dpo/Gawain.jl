@@ -64,20 +64,8 @@ A TRBSolver instance can be used to perform efficient re-solves of a problem (e.
 
 - `model::AbstractNLPModel`: an `NLPModel` representing an unconstrained or bound-constrained problem.
 """
-mutable struct TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi} <: AbstractOptimizationSolver where {
-  M<:AbstractNLPModel,
-  T,
-  S,
-  Fobj,
-  Fgrad,
-  Fhess,
-  Vi<:AbstractVector,
-}
-  # TODO: get the model out of here
-  model::M
-  obj_local::Fobj
-  grad_local::Fgrad
-  hess_local::Fhess
+mutable struct TRBSolver{T,S,Vi} <:
+               AbstractOptimizationSolver where {T,S,Vi<:AbstractVector}
   f::Base.RefValue{T}
   x::S
   gx::S
@@ -96,9 +84,6 @@ end
 
 function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   bound_constrained(model) || error("trb does not handle constraints other than bounds")
-  obj_local = (x, f) -> (f[] = obj(model, x); return 0)
-  grad_local = (x, g) -> (grad!(model, x, g); return 0)
-  hess_local = (x, hvals) -> (hess_coord!(model, x, hvals); return 0)
   f = Ref{T}(zero(T))
   x = similar(model.meta.x0)
   gx = similar(x)
@@ -120,19 +105,7 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   @reset control[].print_level = 0
   @reset control[].error = 6
   @reset control[].out = 6
-  solver = TRBSolver{
-    typeof(model),
-    T,
-    S,
-    typeof(obj_local),
-    typeof(grad_local),
-    typeof(hess_local),
-    typeof(hrows),
-  }(
-    model,
-    obj_local,
-    grad_local,
-    hess_local,
+  solver = TRBSolver{T,S,typeof(hrows)}(
     f,
     x,
     gx,
@@ -153,10 +126,8 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   solver
 end
 
-function SolverCore.reset!(
-  solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
-) where {M,T,S,Fobj,Fgrad,Fhess,Vi}
-  reset!(solver.model)
+function SolverCore.reset!(solver::TRBSolver{T,S,Vi}) where {T,S,Vi}
+  # reset!(solver.model)
   # FIXME: The following line resets solver.control and deactivates f_indexing
   # trb_initialize(T, Int, solver.data, solver.control, solver.status)
 end
@@ -185,35 +156,39 @@ $(Callback_docstring)
 
 If re-solves are of interest, it is more efficient to first instantiate a solver object and call `solve!()` repeatedly:
 
-    solver = TRBSolver(model)
+    solver = TRBSolver(model1)
     stats = GenericExecutionStats(model, solver_specific = Dict{Symbol, TRB_STATUS}())
-    solve!(solver, stats; kwargs...)
+    solve!(solver, model2, stats; kwargs...)
 
 where the `kwargs...` are the same as above.
+In this scenario, `model1` and `model2` need not be the same model, but they must have the same number of variables, and the same Hessian sparsity pattern.
 """
 function trb(model::AbstractNLPModel; kwargs...)
   solver = TRBSolver(model)
   stats = GenericExecutionStats(model, solver_specific = Dict{Symbol,TRB_STATUS}())
-  solve!(solver, stats; kwargs...)
+  solve!(solver, model, stats; kwargs...)
 end
 
 function SolverCore.solve!(
-  solver::TRBSolver{M,T,S,Fobj,Fgrad,Fhess,Vi},
+  solver::TRBSolver{T,S,Vi},
+  model::AbstractNLPModel{T,S},
   stats::GenericExecutionStats;
   callback = (args...) -> nothing,
-  x0::AbstractVector{Float64} = solver.model.meta.x0,
+  x0::AbstractVector{Float64} = model.meta.x0,
   prec::Fprec = (x, u, v) -> (u .= v; return 0),
-) where {M,T,S,Fobj,Fgrad,Fhess,Vi,Fprec}
+) where {T,S,Vi,Fprec}
 
   start_time = time()
   set_status!(stats, :unknown)
-  model = solver.model
   n = get_nvar(model)
   length(x0) == n || error("initial guess has inconsistent size")
+  length(solver.x) == n || error("model dimension incompatible with solver")
   x = solver.x .= x0
   reset!(stats)
 
   nnzh = get_nnzh(model)
+  length(solver.hrows) == nnzh ||
+    error("number of nonzeros in Hessian incompatible with solver")
 
   trb_import(
     T,
@@ -269,11 +244,14 @@ function SolverCore.solve!(
       @error "trb_solve_reverse_with_mat returns with status = $trb_status"
       finished = true
     elseif trb_status == TRB_EVALUATE_OBJECTIVE
-      solver.eval_status[] = solver.obj_local(x, solver.f)
+      solver.f[] = obj(model, x)
+      solver.eval_status[] = 0
     elseif trb_status == TRB_EVALUATE_GRADIENT
-      solver.eval_status[] = solver.grad_local(x, solver.gx)
+      grad!(model, x, solver.gx)
+      solver.eval_status[] = 0
     elseif trb_status == TRB_EVALUATE_HESSIAN
-      solver.eval_status[] = solver.hess_local(x, solver.hvals)
+      hess_coord!(model, x, solver.hvals)
+      solver.eval_status[] = 0
     elseif trb_status == TRB_APPLY_PRECONDITIONER
       solver.eval_status[] = prec(x, solver.u, solver.v)
     else
