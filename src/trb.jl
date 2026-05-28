@@ -1,6 +1,6 @@
 export TRB_STATUS
 export TRBSolver
-export reset!, solve!, trb
+export trb
 
 @enum TRB_IMPORT_STATUS begin
   TRB_IMPORT_SUCCESS = 1
@@ -102,7 +102,7 @@ function TRBSolver(model::AbstractNLPModel{T,S}) where {T,S}
   @reset control[].f_indexing = true  # Fortran 1-based indexing
   # TODO: figure out the best way for a user to adjust options
   # the following lines allocate
-  @reset control[].print_level = 0
+  @reset control[].print_level = 1
   @reset control[].error = 6
   @reset control[].out = 6
   solver = TRBSolver{T,S,typeof(hrows)}(
@@ -184,7 +184,7 @@ function SolverCore.solve!(
   length(x0) == n || error("initial guess has inconsistent size")
   length(solver.x) == n || error("model dimension incompatible with solver")
   x = solver.x .= x0
-  reset!(stats)
+  SolverCore.reset!(stats)
 
   nnzh = get_nnzh(model)
   length(solver.hrows) == nnzh ||
