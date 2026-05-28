@@ -1,3 +1,4 @@
+using SolverCore
 using CUTEst
 
 macro wrappedallocs(expr)
@@ -15,7 +16,7 @@ if Sys.isunix()
   solver = TRBSolver(model)
   stats = GenericExecutionStats(model, solver_specific = Dict{Symbol,TRB_STATUS}())
   solve!(solver, model, stats)
-  reset!(solver)
+  SolverCore.reset!(solver)
   # reset!(model)
   al = @wrappedallocs solve!(solver, model, stats)
   @test al == 0

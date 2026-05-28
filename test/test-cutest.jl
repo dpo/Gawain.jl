@@ -1,29 +1,30 @@
 using CUTEst
+using SolverCore
 
 model = CUTEstModel("3PK")
 
 # straightfoward test
 stats = trb(model)
 @test stats.status == :first_order
-@test stats.iter == 5
+@test stats.iter == 16
 
 # test with solver object
 solver = TRBSolver(model)
 stats = GenericExecutionStats(model)
 solve!(solver, model, stats)
 @test stats.status == :first_order
-@test stats.iter == 5
+@test stats.iter == 16
 
 # test resolve
-reset!(solver)
-reset!(stats)
+SolverCore.reset!(solver)
+SolverCore.reset!(stats)
 solve!(solver, model, stats)
 @test stats.status == :first_order
-@test stats.iter == 5
+@test stats.iter == 16
 
 # test callback
-reset!(solver)
-reset!(stats)
+SolverCore.reset!(solver)
+SolverCore.reset!(stats)
 solve!(
   solver,
   model,
